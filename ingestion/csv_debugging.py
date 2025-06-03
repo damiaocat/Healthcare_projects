@@ -304,6 +304,124 @@ class CSVDebugger:
             except Exception as e2:
                 print(f"Alternative pandas approach also failed: {e2}")
     
+    def spark_compatible_validation(self, file_path: str, delimiter: str = None, 
+                                  expected_schema: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        """Perform more strict validation similar to Spark's behavior"""
+        print("\n" + "=" * 80)
+        print("SPARK-COMPATIBLE VALIDATION")
+        print("=" * 80)
+        
+        if delimiter is None:
+            delimiter = self.delimiter or ','
+        
+        spark_issues = []
+        data_type_issues = []
+        bigquery_issues = []
+        
+        try:
+            # Read with pandas using strict mode
+            df = pd.read_csv(file_path, delimiter=delimiter, encoding=self.encoding, 
+                           dtype=str, keep_default_na=False)  # Read everything as string first
+            
+            print(f"Loaded {len(df)} rows for Spark-compatible analysis")
+            
+            # Check each record for Spark/BigQuery compatibility issues
+            for idx, row in df.iterrows():
+                row_issues = []
+                actual_row_num = idx + 2  # +1 for 0-based index, +1 for header
+                
+                # Check for empty strings vs nulls (Spark treats these differently)
+                empty_fields = [col for col, val in row.items() if val == '']
+                if empty_fields:
+                    row_issues.append(f"Empty string fields: {empty_fields}")
+                
+                # Check for leading/trailing whitespace (BigQuery can be sensitive)
+                whitespace_fields = [col for col, val in row.items() if isinstance(val, str) and val != val.strip()]
+                if whitespace_fields:
+                    row_issues.append(f"Whitespace fields: {whitespace_fields}")
+                
+                # Check for potential data type issues if schema provided
+                if expected_schema:
+                    for col, expected_type in expected_schema.items():
+                        if col in row:
+                            val = row[col]
+                            if self._check_data_type_compatibility(val, expected_type):
+                                row_issues.append(f"Type issue in {col}: '{val}' (expected {expected_type})")
+                
+                # Check for special characters that might cause issues
+                special_char_fields = []
+                for col, val in row.items():
+                    if isinstance(val, str) and any(ord(c) > 127 for c in val):
+                        special_char_fields.append(col)
+                if special_char_fields:
+                    row_issues.append(f"Special characters in: {special_char_fields}")
+                
+                # Check for very long fields (BigQuery has limits)
+                long_fields = [col for col, val in row.items() if isinstance(val, str) and len(val) > 1000]
+                if long_fields:
+                    row_issues.append(f"Very long fields (>1000 chars): {long_fields}")
+                
+                if row_issues:
+                    spark_issues.append({
+                        'row_num': actual_row_num,
+                        'issues': row_issues,
+                        'content': str(dict(row))[:200] + ('...' if len(str(dict(row))) > 200 else '')
+                    })
+                
+                # Stop after checking reasonable number for performance
+                if idx > 10000:
+                    break
+            
+            print(f"\nSpark-compatible issues found: {len(spark_issues)}")
+            
+            if spark_issues:
+                print(f"\nPotential Spark/BigQuery Issues ({min(10, len(spark_issues))} shown):")
+                print("-" * 80)
+                for issue in spark_issues[:10]:
+                    print(f"Row {issue['row_num']}: {'; '.join(issue['issues'])}")
+                    if len(issue['content']) < 150:
+                        print(f"  Data: {issue['content']}")
+                
+                # Find the most likely culprit (first issue)
+                if len(spark_issues) >= 1:
+                    print(f"\n*** MOST LIKELY MALFORMED RECORD ***")
+                    culprit = spark_issues[0]
+                    print(f"Row {culprit['row_num']}: {'; '.join(culprit['issues'])}")
+                    print(f"Content: {culprit['content']}")
+            
+            return {
+                'spark_issues': spark_issues,
+                'total_checked': min(len(df), 10000)
+            }
+            
+        except Exception as e:
+            print(f"Spark-compatible validation failed: {e}")
+            return {}
+    
+    def _check_data_type_compatibility(self, value: str, expected_type: str) -> bool:
+        """Check if value is compatible with expected type"""
+        if not isinstance(value, str) or value == '':
+            return False
+        
+        expected_type = expected_type.lower()
+        
+        try:
+            if expected_type in ['int', 'integer', 'long']:
+                int(value)
+            elif expected_type in ['float', 'double']:
+                float(value)
+            elif expected_type in ['boolean', 'bool']:
+                if value.lower() not in ['true', 'false', '1', '0', 'yes', 'no']:
+                    return True
+            elif expected_type in ['date']:
+                pd.to_datetime(value)
+            elif expected_type in ['timestamp']:
+                pd.to_datetime(value)
+        except:
+            return True  # Type conversion failed
+        
+        return False
+    
     def generate_summary_report(self, file_path: str, structure_info: Dict, 
                               malformed_info: Dict) -> None:
         """Generate a comprehensive summary report"""
@@ -424,6 +542,9 @@ def main():
         
         # Step 4: Pandas validation
         debugger.pandas_validation(args.file_path, delimiter, expected_schema)
+        
+        # Step 4b: Spark-compatible validation (more strict)
+        spark_validation = debugger.spark_compatible_validation(args.file_path, delimiter, expected_schema)
         
         # Step 5: Generate summary report
         debugger.generate_summary_report(args.file_path, structure_info, malformed_info)
