@@ -1,59 +1,38 @@
 import json
 import csv
 
-# Load JSON data
-with open('config.json', 'r') as file:
-    data = json.load(file)
+# Load JSON with error handling
+try:
+    data = json.load(open('config.json'))
+except:
+    print("Error loading JSON file")
+    exit()
 
-# Extract and save to CSV
-with open('job_configurations.csv', 'w', newline='') as csvfile:
-    writer = csv.writer(csvfile)
+# Open CSV file
+with open('output.csv', 'w', newline='') as f:
+    writer = csv.writer(f)
     
     # Write header
-    writer.writerow(['job_id', 'job_name', 'description', 'source_path', 'source_bucket', 
-                     'is_auto_increment', 'target_file_path', 'target_dataset_table', 
-                     'fully_qualified_name', 'owner_name', 'owner_email'])
+    writer.writerow(['_id', 'name', 'sourcePath', 'isAutoIncrement', 'filePath', 'targetDatasetTable', 'fullyQualifiedName'])
     
-    # Write data rows
-    for job in data:
-        # Get basic info
-        job_id = job.get('_id', '')
-        job_name = job.get('name', '')
-        description = job.get('description', '')
-        
-        # Get owner info
-        owner = job.get('owner', [{}])[0] if job.get('owner') else {}
-        owner_name = owner.get('name', '') if owner else ''
-        owner_email = owner.get('email', '') if owner else ''
-        
-        # Get source configuration
-        source_config = job.get('sourceConfiguration', {})
-        source_path = source_config.get('sourcePath', '')
-        source_bucket = source_config.get('landingBucket', '')
-        
-        # Get target configuration  
-        target_config = job.get('targetConfiguration', {})
-        is_auto_increment = target_config.get('isAutoIncrement', False)
-        target_file_path = target_config.get('filePath', '')
-        target_dataset_table = target_config.get('targetDatasetTable', '')
-        fully_qualified_name = target_config.get('fullyQualifiedName', '')
-        
-        writer.writerow([
-            job_id,
-            job_name, 
-            description,
-            source_path,
-            source_bucket,
-            is_auto_increment,
-            target_file_path,
-            target_dataset_table,
-            fully_qualified_name,
-            owner_name,
-            owner_email
-        ])
+    # Loop through each item
+    for item in data:
+        try:
+            # Get nested values safely
+            source_config = item.get('sourceConfiguration') or {}
+            target_config = item.get('targetConfiguration') or {}
+            
+            writer.writerow([
+                item.get('_id') or '',
+                item.get('name') or '',
+                source_config.get('sourcePath') or '',
+                target_config.get('isAutoIncrement') or '',
+                target_config.get('filePath') or '',
+                target_config.get('targetDatasetTable') or '',
+                target_config.get('fullyQualifiedName') or ''
+            ])
+        except:
+            # If any error, write a row with empty values
+            writer.writerow(['', '', '', '', '', '', ''])
 
-print(f"Extracted {len(data)} configurations to job_configurations.csv")
-
-print(f"Extracted {len(data)} configurations to job_configurations.csv")
-
-print(f"Extracted {len(data)} configurations to job_configurations.csv")
+print("Done!")
